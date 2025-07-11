@@ -81,8 +81,8 @@ Cd = 1.0
 
 # --- CHANGE: Initial Conditions ---
 # Start with a full, high-pressure tank
-P_initial = 20e5     # 20 bar initial pressure
-T_initial = 300.0    # 300 K initial temperature
+P_initial = 2e5     # 20 bar initial pressure
+T_initial = 350.0    # 300 K initial temperature
 m_initial = P_initial * V / (R * T_initial)
 
 # Calculate initial internal energy

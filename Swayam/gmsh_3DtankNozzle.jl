@@ -151,31 +151,47 @@ function create_3d_wedge_tank()
     
     println("   Revolving all surfaces with $(num_layers) layers...")
     
-    # Method 1: Try revolving with numElements parameter for structured layers
-    # This should create structured layers in the circumferential direction
+    # Set GMSH options for hexahedral meshing BEFORE revolution
+    gmsh.option.setNumber("Mesh.RecombineAll", 1)     # Enable recombination globally
+    gmsh.option.setNumber("Mesh.Algorithm", 8)         # Frontal-Delaunay for quads
+    gmsh.option.setNumber("Mesh.Algorithm3D", 1)       # Delaunay for 3D
+    gmsh.option.setNumber("Mesh.Recombine3DAll", 1)    # Enable 3D recombination
+    gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)  # All-hex subdivision
     
+    # Revolve with structured layers
     revolve_result = gmsh.model.geo.revolve(
         [(2, 1), (2, 2), (2, 3), (2, 4)],  # All 4 surfaces to revolve
         0.0, 0.0, 0.0,                      # Point on rotation axis
         1.0, 0.0, 0.0,                      # Rotation axis (X-axis)
         wedge_angle_rad,                    # Rotation angle
-        [num_layers]                        # Number of structured layers
+        [num_layers],                       # Number of structured layers
+        [],                                 # Heights (empty for equal spacing)
+        true                               # Recombine to create hexahedra
     )
     
     gmsh.model.geo.synchronize()
     
-    # Set transfinite volumes for the created 3D regions
-    # This should force structured hexahedral meshing
+    # Get all created volumes
     volumes = gmsh.model.getEntities(3)
     println("   Found $(length(volumes)) volumes after revolution")
     
+    # Set transfinite volumes for structured hexahedral meshing
     for (dim, tag) in volumes
         try
-            # Set the volume to be transfinite (structured)
             gmsh.model.geo.mesh.setTransfiniteVolume(tag)
             println("   Set transfinite volume $(tag)")
         catch e
             println("   Warning: Could not set transfinite for volume $(tag): $(e)")
+        end
+    end
+    
+    # Ensure recombination for all surfaces and volumes
+    all_surfaces = gmsh.model.getEntities(2)
+    for (dim, tag) in all_surfaces
+        try
+            gmsh.model.mesh.setRecombine(2, tag)
+        catch e
+            # Some surfaces might not support recombination
         end
     end
     
@@ -196,36 +212,74 @@ function create_3d_wedge_tank()
     # ========================================================================
     println("🔧 Step 4: Generating 3D hexahedral mesh...")
     
-    # Check what entities we have after extrusion
+    # Check what entities we have after revolution
     volumes = gmsh.model.getEntities(3)
     surfaces = gmsh.model.getEntities(2)
-    println("   Found $(length(volumes)) volumes and $(length(surfaces)) surfaces after extrusion")
+    println("   Found $(length(volumes)) volumes and $(length(surfaces)) surfaces after revolution")
     
-    # The extrusion with recombine=true should already create hexahedral elements
-    # But let's ensure the settings are correct
+    # Additional settings to ensure hexahedral elements
+    gmsh.option.setNumber("Mesh.RecombineAll", 1)           # Global recombination
+    gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 1.0)
+    gmsh.option.setNumber("Mesh.ElementOrder", 1)           # Linear elements
+    gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)      # Disable high-order
     
-    # Set 3D mesh algorithm for structured elements
-    gmsh.option.setNumber("Mesh.Algorithm3D", 1)     # Delaunay (works well with structured)
-    gmsh.option.setNumber("Mesh.Recombine3DAll", 1)  # Enable 3D recombination
-    gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)  # Subdivision algorithm
+    # Force all surfaces to be quad-dominated
+    for (dim, tag) in surfaces
+        try
+            gmsh.model.mesh.setRecombine(2, tag)
+        catch e
+            # Continue if recombination fails for some surfaces
+        end
+    end
     
-    # The mesh should already be created by the extrusion, but let's generate to be sure
+    # Generate the mesh step by step
     try
+        # First generate 1D mesh (edges)
+        gmsh.model.mesh.generate(1)
+        println("   ✅ 1D mesh generated")
+        
+        # Then generate 2D mesh (surfaces)
+        gmsh.model.mesh.generate(2)
+        println("   ✅ 2D mesh generated")
+        
+        # Finally generate 3D mesh (volumes)
         gmsh.model.mesh.generate(3)
         println("   ✅ 3D hexahedral mesh generated successfully")
         
-        # Check element types
+        # Check element types to verify we have hexahedra
         element_types = gmsh.model.mesh.getElementTypes()
         println("   📊 Element types found: $(element_types)")
         
+        has_hexahedra = false
         for elem_type in element_types
             elem_name = gmsh.model.mesh.getElementProperties(elem_type)[1]
             num_elements = length(gmsh.model.mesh.getElementsByType(elem_type)[1])
             println("   - Type $(elem_type) ($(elem_name)): $(num_elements) elements")
+            
+            # Check if we have hexahedral elements (type 5 = 8-node hexahedron)
+            if elem_type == 5
+                has_hexahedra = true
+                println("   ✅ Found hexahedral elements!")
+            end
+        end
+        
+        if !has_hexahedra
+            println("   ⚠️  Warning: No hexahedral elements found. You may have tetrahedral elements.")
+            println("   💡 This might be due to complex geometry. Consider simplifying the mesh.")
         end
         
     catch e
         println("   ❌ Error generating 3D mesh: $(e)")
+        println("   🔄 Trying fallback mesh generation...")
+        
+        # Fallback: Try without some strict settings
+        gmsh.option.setNumber("Mesh.Algorithm3D", 4)  # Try Frontal algorithm
+        try
+            gmsh.model.mesh.generate(3)
+            println("   ✅ 3D mesh generated with fallback settings")
+        catch e2
+            println("   ❌ Fallback also failed: $(e2)")
+        end
     end
     
     # ========================================================================

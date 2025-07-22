@@ -1,5 +1,4 @@
 using Ferrite, SparseArrays, BlockArrays, LinearAlgebra, UnPack, LinearSolve, WriteVTK
-
 using OrdinaryDiffEq
 
 ν = 1.0 / 1000.0; #dynamic viscosity

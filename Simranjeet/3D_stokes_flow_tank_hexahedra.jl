@@ -256,7 +256,7 @@ function setup_grid(h = 0.05)
     gmsh.fltk.run()
 
     # Save in MSH format for Ferrite
-    gmsh.write("tank_3D_wedge.msh")
+    gmsh.write("Simranjeet/paraview/tank_3D_wedge.msh")
 
 
     # Convert to Ferrite grid

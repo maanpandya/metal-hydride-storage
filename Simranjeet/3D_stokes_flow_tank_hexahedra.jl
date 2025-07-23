@@ -1,4 +1,4 @@
-using Ferrite, FerriteGmsh, Gmsh, Tensors, LinearAlgebra, SparseArrays
+using Ferrite, FerriteGmsh, Gmsh, Tensors, LinearAlgebra, SparseArrays, WriteVTK
 
 function setup_grid(h = 0.05)
     # Initialize Gmsh
@@ -123,15 +123,6 @@ function setup_grid(h = 0.05)
     gmsh.model.mesh.setRecombine(2, 3)
     gmsh.model.mesh.setRecombine(2, 4)
     
-    # Generate 2D mesh
-    gmsh.model.mesh.generate(2)
-    
-    # Save and show 2D mesh
-    gmsh.write("tank_2D_structured.msh")
-    println("   ✅ 2D structured mesh saved: tank_2D_structured.msh")
-    println("   🖥️  Showing 2D structured mesh - close window to continue...")
-    gmsh.fltk.run()  # Show 2D mesh first
-    
     # ========================================================================
     # STEP 3: Revolve to create 3D wedge with structured mesh
     # ========================================================================
@@ -197,6 +188,7 @@ function setup_grid(h = 0.05)
     end
     
     println("   ✅ Revolution completed with structured layers")
+    gmsh.fltk.run()
     
     # ========================================================================
     # STEP 4: Generate 3D mesh with hexahedral elements
@@ -214,26 +206,8 @@ function setup_grid(h = 0.05)
     gmsh.option.setNumber("Mesh.ElementOrder", 1)           # Linear elements
     gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)      # Disable high-order
     
-    # Force all surfaces to be quad-dominated
-    for (dim, tag) in surfaces
-        try
-            gmsh.model.mesh.setRecombine(2, tag)
-        catch e
-            # Continue if recombination fails for some surfaces
-        end
-    end
-    
     # Generate the mesh step by step
     try
-        # First generate 1D mesh (edges)
-        gmsh.model.mesh.generate(1)
-        println("   ✅ 1D mesh generated")
-        
-        # Then generate 2D mesh (surfaces)
-        gmsh.model.mesh.generate(2)
-        println("   ✅ 2D mesh generated")
-        
-        # Finally generate 3D mesh (volumes)
         gmsh.model.mesh.generate(3)
         println("   ✅ 3D hexahedral mesh generated successfully")
         
@@ -274,25 +248,29 @@ function setup_grid(h = 0.05)
     end
     
     # ========================================================================
-    # STEP 5: Save and visualize
+    # STEP 5: Convert to Ferrite grid and save
     # ========================================================================
-    gmsh.write("tank_3D_wedge.vtk")
-    println("   ✅ 3D wedge mesh saved: tank_3D_wedge.msh")
-    
-    # Show mesh info
-    mesh_info = gmsh.model.mesh.getNodes()
-    num_nodes = length(mesh_info[1])
-    println("   📊 Total nodes: $(num_nodes)")
-    
-    # Show 3D mesh
+
+    # Show 3D mesh in Gmsh
     println("   🖥️  Showing 3D mesh...")
     gmsh.fltk.run()
-    
+
+    # Save in MSH format for Ferrite
+    gmsh.write("tank_3D_wedge.msh")
+
+
+    # Convert to Ferrite grid
+    grid = FerriteGmsh.togrid()
+
+    # Save VTK via Ferrite for proper 3D visualization
+    VTKGridFile("Simranjeet/paraview/tank_3D_wedge", grid) do vtk
+        # Add any cell/node data here if needed
+    end
+
     gmsh.finalize()
     println("\n✅ Done!")
     return grid
 end
-
 
 
 function setup_fevalues(ipu, ipp, ipg)
@@ -434,7 +412,7 @@ function main()
     # Grid
     println("Setting up grid...")
     h = 0.05 # approximate element size
-    grid = setup_grid(h)
+    grid = setup_grid()
     # Interpolations
     ipu = Lagrange{RefQuadrilateral, 2}()^2 # quadratic
     ipp = Lagrange{RefQuadrilateral, 1}()   # linear
@@ -456,7 +434,7 @@ function main()
     u = K \ f
     apply!(u, ch)
     # Export the solution
-    VTKGridFile("3D_stokes_flow_tank", grid) do vtk
+    VTKGridFile("Simranjeet/paraview/3D_stokes_flow_tank", grid) do vtk
         write_solution(vtk, dh, u)
         Ferrite.write_constraints(vtk, ch)
     end

@@ -220,7 +220,7 @@ function setup_constraints(dh, fvp)
     return ch
 end
 
-function apply_pressure_inlet!(f, dh, fvu, pressure_value::Float64)
+function apply_total_pressure_inlet!(f, dh, fvu, u, rho, p_total::Float64)
     Γinlet = getfacetset(dh.grid, "inlet")
 
     range_u = dof_range(dh, :u)
@@ -236,20 +236,31 @@ function apply_pressure_inlet!(f, dh, fvu, pressure_value::Float64)
         for qp = 1:getnquadpoints(fvu)
             dΓ = getdetJdV(fvu, qp)
             n = getnormal(fvu, qp)
+            u_qp = Vec{2, Float64}((0.0, 0.0))  # initialize velocity
 
             for i in 1:getnbasefunctions(fvu)
                 ϕ = shape_value(fvu, qp, i)
-                t = -pressure_value * ϕ * n 
-                Iu = element_dofs[range_u[2i-1]]  # x-component
-                Ju = element_dofs[range_u[2i]]    # y-component
+                Iu = element_dofs[range_u[2i-1]]
+                Ju = element_dofs[range_u[2i]]
+                u_qp += ϕ * Vec{2, Float64}((u[Iu], u[Ju]))
+            end
 
-                f[Iu] += t[1] * dΓ
-                f[Ju] += t[2] * dΓ
+            u_mag² = dot(u_qp, u_qp)
+            p_static = p_total + 0.5 * rho * u_mag²
+            t = -p_static * n
+
+            for i in 1:getnbasefunctions(fvu)
+                ϕ = shape_value(fvu, qp, i)
+                Iu = element_dofs[range_u[2i-1]]
+                Ju = element_dofs[range_u[2i]]
+                f[Iu] += t[1] * ϕ * dΓ
+                f[Ju] += t[2] * ϕ * dΓ
             end
         end
     end
     return f
 end
+
 
 
 function assemble_system!(K, f, dh, cvu, cvp)
@@ -310,32 +321,49 @@ function main()
     h = 0.05 # approximate element size
     grid = setup_grid(h)
     # Interpolations
-    ipu = Lagrange{RefQuadrilateral, 2}()^2 # quadratic
-    ipp = Lagrange{RefQuadrilateral, 1}()   # linear
-    # Dofs
+    ipu = Lagrange{RefQuadrilateral, 2}()^2
+    ipp = Lagrange{RefQuadrilateral, 1}()
     dh = setup_dofs(grid, ipu, ipp)
-    # FE values
-    ipg = Lagrange{RefQuadrilateral, 1}() # linear geometric interpolation
+
+    ipg = Lagrange{RefQuadrilateral, 1}()
     cvu, cvp, fvp = setup_fevalues(ipu, ipp, ipg)
-    # Boundary conditions
     ch = setup_constraints(dh, fvp)
-    # Global tangent matrix and rhs
-    coupling = [true true; true false] # no coupling between pressure test/trial functions
+
+    coupling = [true true; true false]
     K = allocate_matrix(dh, ch; coupling = coupling)
     f = zeros(ndofs(dh))
-    # Assemble system
+
     assemble_system!(K, f, dh, cvu, cvp)
-    # Apply boundary conditions and solve
-    apply_pressure_inlet!(f, dh, fvp, 10000.0)  # for example: pressure_value = 1.0
     apply!(K, f, ch)
-    u = K \ f
+
+    u = zeros(ndofs(dh))  # initial guess
     apply!(u, ch)
-    # Export the solution
-    VTKGridFile("Simranjeet/paraview/2D_stokes_flow_tank", grid) do vtk
+
+    ρ = 1.0
+    p_total = 1000.0
+    tol = 1e-8
+    max_iter = 20
+
+    for iter = 1:max_iter
+        f = zeros(ndofs(dh))
+        assemble_system!(K, f, dh, cvu, cvp)
+        apply_total_pressure_inlet!(f, dh, fvp, u, ρ, p_total)
+        apply!(K, f, ch)
+        u_new = K \ f
+        print("Iteration $iter: norm = $(norm(u_new - u))\n")
+        apply!(u_new, ch)
+
+        if norm(u_new - u) < tol
+            println("Converged after $iter iterations")
+            break
+        end
+        u .= u_new
+    end
+
+    VTKGridFile("Simranjeet/paraview/2D_stokes_totalpressure", grid) do vtk
         write_solution(vtk, dh, u)
         Ferrite.write_constraints(vtk, ch)
     end
-
 
     return
 end

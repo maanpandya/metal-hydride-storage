@@ -30,16 +30,12 @@ nels = (4 * nelem_base, nelem_base)  # Elements in (x,y) directions
 ρ = 1                      #
 
 # Inlet Velocity Parameters
-v_max = 20.0                     # Maximum inlet velocity [m/s]
+v_max = 10.0                     # Maximum inlet velocity [m/s]
 ramp_time = 3                   # Time to reach full velocity [s]
 
 # Finite Element Parameters
 dim = 2                         # Spatial dimension
 degree = 1                      # Base polynomial degree
-
-# Solver Tolerances
-reltol = 1e-4                   # Relative tolerance
-abstol = 1e-5                   # Absolute tolerance
 
 
 # Generate mesh and setup finite elements
@@ -295,19 +291,19 @@ function assemble_stokes_matrix!(K, dh, cvu, cvp, viscosity)
 end
 
 T = 15.0
-Δt₀ = 0.001
+Δt₀ = 0.01
 Δt_save = 0.1
 
 M = allocate_matrix(dh)  # Mass matrix
 M = assemble_mass_matrix!(M, dh, cvu, cvp)
 
-# K = allocate_matrix(dh)  # Stiffness matrix
-# K = assemble_stokes_matrix!(K, dh, cvu, cvp, μ)
+# Assemble stiffness matrix
 coupling = [true true; true false] # no coupling between pressure test/trial functions
 K = allocate_matrix(dh, ch; coupling = coupling)
+K = assemble_stokes_matrix!(K, dh, cvu, cvp, μ)  # Actually assemble the matrix!
 u₀ = zeros(ndofs(dh))
 apply!(u₀, ch);
-println("stiffness matrix...")
+println("Stiffness matrix assembled successfully")
 
 jac_sparsity = sparse(K);
 

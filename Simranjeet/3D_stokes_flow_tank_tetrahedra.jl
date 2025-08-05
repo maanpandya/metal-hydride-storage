@@ -1,4 +1,4 @@
-using Ferrite, FerriteGmsh, Gmsh, Tensors, LinearAlgebra, SparseArrays
+using Ferrite, FerriteGmsh, Gmsh, Tensors, LinearAlgebra, SparseArrays, WriteVTK
 
 function setup_grid(h = 0.05)
     # Initialize Gmsh
@@ -107,11 +107,6 @@ function setup_grid(h = 0.05)
     
     gmsh.model.geo.synchronize()
     
-    # Assign physical groups
-    gmsh.model.addPhysicalGroup(1, [1, 2, 3, 4, 5, 6, 7, 9, 10], -1, "wall")
-    gmsh.model.addPhysicalGroup(1, [8], -1, "inlet")
-    gmsh.model.addPhysicalGroup(2, [1, 2, 3, 4], -1, "omega")
-    
     # ========================================================================
     # STEP 2: Generate structured 2D mesh
     # ========================================================================
@@ -123,183 +118,111 @@ function setup_grid(h = 0.05)
     gmsh.model.mesh.setRecombine(2, 3)
     gmsh.model.mesh.setRecombine(2, 4)
     
-    # Generate 2D mesh
-    gmsh.model.mesh.generate(2)
-    
-    # Save and show 2D mesh
-    gmsh.write("tank_2D_structured.msh")
-    println("   ✅ 2D structured mesh saved: tank_2D_structured.msh")
-    println("   🖥️  Showing 2D structured mesh - close window to continue...")
-    gmsh.fltk.run()  # Show 2D mesh first
-    
     # ========================================================================
-    # STEP 3: Revolve to create 3D wedge with structured mesh
+    # STEP 3: Revolve to create 3D wedge with tetrahedra
     # ========================================================================
     println("🔧 Step 3: Revolving structured surfaces to create 3D wedge...")
-    
-    # Calculate number of layers for revolution
-    num_layers = 8  # Number of elements in circumferential direction
-    
+
+    num_layers = 8
     println("   Revolving all surfaces with $(num_layers) layers...")
-    
-    # Set GMSH options for hexahedral meshing BEFORE revolution
-    gmsh.option.setNumber("Mesh.RecombineAll", 1)     # Enable recombination globally
-    gmsh.option.setNumber("Mesh.Algorithm", 8)         # Frontal-Delaunay for quads
-    gmsh.option.setNumber("Mesh.Algorithm3D", 1)       # Delaunay for 3D
-    gmsh.option.setNumber("Mesh.Recombine3DAll", 1)    # Enable 3D recombination
-    gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)  # All-hex subdivision
-    
-    # Revolve with structured layers
+
+    # ⚠️ Disable recombination options
+    gmsh.option.setNumber("Mesh.RecombineAll", 0)
+    gmsh.option.setNumber("Mesh.Recombine3DAll", 0)
+
+    # Optional: Use unstructured algorithms for triangles and tets
+    gmsh.option.setNumber("Mesh.Algorithm", 6)    # Delaunay triangles
+    gmsh.option.setNumber("Mesh.Algorithm3D", 1)  # Delaunay tetrahedra
+
+    # Do NOT recombine
     revolve_result = gmsh.model.geo.revolve(
-        [(2, 1), (2, 2), (2, 3), (2, 4)],  # All 4 surfaces to revolve
-        0.0, 0.0, 0.0,                      # Point on rotation axis
-        1.0, 0.0, 0.0,                      # Rotation axis (X-axis)
-        wedge_angle_rad,                    # Rotation angle
-        [num_layers],                       # Number of structured layers
-        [],                                 # Heights (empty for equal spacing)
-        true                               # Recombine to create hexahedra
+        [(2, 1), (2, 2), (2, 3), (2, 4)],
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        wedge_angle_rad,
+        [num_layers],
+        [],
+        false  # <<<< This disables recombination and avoids hexahedra/prisms
     )
-    
+
     gmsh.model.geo.synchronize()
-    
-    # Get all created volumes
-    volumes = gmsh.model.getEntities(3)
-    println("   Found $(length(volumes)) volumes after revolution")
-    
-    # Set transfinite volumes for structured hexahedral meshing
-    for (dim, tag) in volumes
-        try
-            gmsh.model.geo.mesh.setTransfiniteVolume(tag)
-            println("   Set transfinite volume $(tag)")
-        catch e
-            println("   Warning: Could not set transfinite for volume $(tag): $(e)")
-        end
-    end
-    
-    # Ensure recombination for all surfaces and volumes
-    all_surfaces = gmsh.model.getEntities(2)
-    for (dim, tag) in all_surfaces
-        try
-            gmsh.model.mesh.setRecombine(2, tag)
-        catch e
-            # Some surfaces might not support recombination
-        end
-    end
-    
-    # Set recombination for volumes to ensure hexahedral elements
-    for (dim, tag) in volumes
-        try
-            gmsh.model.mesh.setRecombine(3, tag)
-            println("   Set recombination for volume $(tag)")
-        catch e
-            println("   Warning: Could not set recombination for volume $(tag): $(e)")
-        end
-    end
-    
-    println("   ✅ Revolution completed with structured layers")
-    
+
+   
+    inlet_tag = 100
+
+    # Define all revolved surface tags
+    revolved_surfaces = [tag for (dim, tag) in revolve_result if dim == 2]
+
+    # Wall surface tags = all revolved surfaces except inlet and internal ones
+    other_tags = Set([52, 30, 56, 79, 35, 101, 57])  # Internal or periodic surfaces to exclude
+    wall_tags = [tag for tag in revolved_surfaces if tag != inlet_tag && !(tag in other_tags)]
+
+    # Add physical groups
+    gmsh.model.addPhysicalGroup(2, [inlet_tag], -1, "inlet")
+    gmsh.model.addPhysicalGroup(2, wall_tags, -1, "wall")
+
+    gmsh.model.addPhysicalGroup(2, [1], -1, "Γ1")
+    gmsh.model.addPhysicalGroup(2, [35], -1, "Γ35")
+    gmsh.model.addPhysicalGroup(2, [2], -1, "Γ2")
+    gmsh.model.addPhysicalGroup(2, [57], -1, "Γ57")
+    gmsh.model.addPhysicalGroup(2, [3], -1, "Γ3")
+    gmsh.model.addPhysicalGroup(2, [101], -1, "Γ101")
+    gmsh.model.addPhysicalGroup(2, [4], -1, "Γ4")
+    gmsh.model.addPhysicalGroup(2, [79], -1, "Γ79")
+
+
+
     # ========================================================================
-    # STEP 4: Generate 3D mesh with hexahedral elements
+    # STEP 4: Mesh generation
     # ========================================================================
-    println("🔧 Step 4: Generating 3D hexahedral mesh...")
-    
-    # Check what entities we have after revolution
-    volumes = gmsh.model.getEntities(3)
-    surfaces = gmsh.model.getEntities(2)
-    println("   Found $(length(volumes)) volumes and $(length(surfaces)) surfaces after revolution")
-    
-    # Additional settings to ensure hexahedral elements
-    gmsh.option.setNumber("Mesh.RecombineAll", 1)           # Global recombination
-    gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 1.0)
-    gmsh.option.setNumber("Mesh.ElementOrder", 1)           # Linear elements
-    gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)      # Disable high-order
-    
-    # Force all surfaces to be quad-dominated
-    for (dim, tag) in surfaces
-        try
-            gmsh.model.mesh.setRecombine(2, tag)
-        catch e
-            # Continue if recombination fails for some surfaces
-        end
+    println("🔧 Step 4: Generating tetrahedral 3D mesh...")
+
+    # Set general mesh options for tetrahedra
+    gmsh.option.setNumber("Mesh.RecombineAll", 0)
+    gmsh.option.setNumber("Mesh.ElementOrder", 1)
+    gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)
+
+    # Run meshing
+    gmsh.model.mesh.generate(3)
+    println("   ✅ 3D tetrahedral mesh generated successfully")
+
+    # Print element types to confirm
+    element_types = gmsh.model.mesh.getElementTypes()
+    println("   📊 Element types found: $(element_types)")
+    for elem_type in element_types
+        elem_name = gmsh.model.mesh.getElementProperties(elem_type)[1]
+        num_elements = length(gmsh.model.mesh.getElementsByType(elem_type)[1])
+        println("   - Type $(elem_type) ($(elem_name)): $(num_elements) elements")
     end
-    
-    # Generate the mesh step by step
-    try
-        # First generate 1D mesh (edges)
-        gmsh.model.mesh.generate(1)
-        println("   ✅ 1D mesh generated")
-        
-        # Then generate 2D mesh (surfaces)
-        gmsh.model.mesh.generate(2)
-        println("   ✅ 2D mesh generated")
-        
-        # Finally generate 3D mesh (volumes)
-        gmsh.model.mesh.generate(3)
-        println("   ✅ 3D hexahedral mesh generated successfully")
-        
-        # Check element types to verify we have hexahedra
-        element_types = gmsh.model.mesh.getElementTypes()
-        println("   📊 Element types found: $(element_types)")
-        
-        has_hexahedra = false
-        for elem_type in element_types
-            elem_name = gmsh.model.mesh.getElementProperties(elem_type)[1]
-            num_elements = length(gmsh.model.mesh.getElementsByType(elem_type)[1])
-            println("   - Type $(elem_type) ($(elem_name)): $(num_elements) elements")
-            
-            # Check if we have hexahedral elements (type 5 = 8-node hexahedron)
-            if elem_type == 5
-                has_hexahedra = true
-                println("   ✅ Found hexahedral elements!")
-            end
-        end
-        
-        if !has_hexahedra
-            println("   ⚠️  Warning: No hexahedral elements found. You may have tetrahedral elements.")
-            println("   💡 This might be due to complex geometry. Consider simplifying the mesh.")
-        end
-        
-    catch e
-        println("   ❌ Error generating 3D mesh: $(e)")
-        println("   🔄 Trying fallback mesh generation...")
-        
-        # Fallback: Try without some strict settings
-        gmsh.option.setNumber("Mesh.Algorithm3D", 4)  # Try Frontal algorithm
-        try
-            gmsh.model.mesh.generate(3)
-            println("   ✅ 3D mesh generated with fallback settings")
-        catch e2
-            println("   ❌ Fallback also failed: $(e2)")
-        end
-    end
-    
-    # ========================================================================
-    # STEP 5: Save and visualize
-    # ========================================================================
-    gmsh.write("tank_3D_wedge.vtk")
-    println("   ✅ 3D wedge mesh saved: tank_3D_wedge.msh")
-    
-    # Show mesh info
-    mesh_info = gmsh.model.mesh.getNodes()
-    num_nodes = length(mesh_info[1])
-    println("   📊 Total nodes: $(num_nodes)")
-    
-    # Show 3D mesh
+
+
+    # Show 3D mesh in Gmsh
     println("   🖥️  Showing 3D mesh...")
     gmsh.fltk.run()
-    
+
+    # Save in MSH format for Ferrite
+    gmsh.write("Simranjeet/paraview/tank_3D_wedge_tetrahedra.msh")
+
+
+    # Convert to Ferrite grid
+    grid = FerriteGmsh.togrid()
+
+    # Save VTK via Ferrite for proper 3D visualization
+    VTKGridFile("Simranjeet/paraview/tank_3D_wedge_tetrahedra", grid) do vtk
+        # Add any cell/node data here if needed
+    end
+
     gmsh.finalize()
     println("\n✅ Done!")
     return grid
 end
 
 
-
 function setup_fevalues(ipu, ipp, ipg)
-    qr = QuadratureRule{RefQuadrilateral}(2)
+    qr = QuadratureRule{RefTetrahedron}(2)
     cvu = CellValues(qr, ipu, ipg)
     cvp = CellValues(qr, ipp, ipg)
-    qr_facet = FacetQuadratureRule{RefQuadrilateral}(2)
+    qr_facet = FacetQuadratureRule{RefTetrahedron}(2)
     fvp = FacetValues(qr_facet, ipp, ipg)
     return cvu, cvp, fvp
 end
@@ -314,60 +237,100 @@ end
 
 function setup_mean_constraint(dh, fvp)
     assembler = Ferrite.COOAssembler()
-    # All external boundaries
+
+    # Combine all boundary facets
     set = union(
         getfacetset(dh.grid, "inlet"),
         getfacetset(dh.grid, "wall")
     )
-    # Allocate buffers
+
+    # DoF and buffer setup
     range_p = dof_range(dh, :p)
     element_dofs = zeros(Int, ndofs_per_cell(dh))
     element_dofs_p = view(element_dofs, range_p)
-    element_coords = zeros(Vec{2}, 4)
-    Ce = zeros(1, length(range_p)) # Local constraint matrix (only 1 row)
-    # Loop over all the boundaries
-    for (ci, fi) in set
+    element_coords = zeros(Vec{3}, 4)  # Triangular face → 3 nodes
+
+    Ce = zeros(1, length(range_p))  # Local constraint vector
+
+    for (cell_id, face_id) in set
         Ce .= 0
-        getcoordinates!(element_coords, dh.grid, ci)
-        reinit!(fvp, element_coords, fi)
-        celldofs!(element_dofs, dh, ci)
+        getcoordinates!(element_coords, dh.grid, cell_id)
+        reinit!(fvp, element_coords, face_id)
+        celldofs!(element_dofs, dh, cell_id)
+
         for qp in 1:getnquadpoints(fvp)
             dΓ = getdetJdV(fvp, qp)
             for i in 1:getnbasefunctions(fvp)
                 Ce[1, i] += shape_value(fvp, qp, i) * dΓ
             end
         end
-        # Assemble to row 1
+
         assemble!(assembler, [1], element_dofs_p, Ce)
     end
+
     C, _ = finish_assemble(assembler)
-    # Create an AffineConstraint from the C-matrix
+
+    # Normalize constraint to set one pressure DoF as reference
     _, J, V = findnz(C)
-    _, constrained_dof_idx = findmax(abs2, V)
-    constrained_dof = J[constrained_dof_idx]
-    V ./= V[constrained_dof_idx]
-    mean_value_constraint = AffineConstraint(
+    _, constrained_idx = findmax(abs2, V)
+    constrained_dof = J[constrained_idx]
+    V ./= V[constrained_idx]
+
+    return AffineConstraint(
         constrained_dof,
-        Pair{Int, Float64}[J[i] => -V[i] for i in 1:length(J) if J[i] != constrained_dof],
+        [J[i] => -V[i] for i in eachindex(J) if J[i] != constrained_dof],
         0.0,
     )
-    return mean_value_constraint
 end
+
 
 function setup_constraints(dh, fvp)
     ch = ConstraintHandler(dh)
 
-    # Inlet: Dirichlet BC for velocity
+    # Inlet: Dirichlet BC for velocity (along x-direction)
     Γin = getfacetset(dh.grid, "inlet")
-    inlet_bc = Dirichlet(:u, Γin, (x,t) -> [1.0, 0.0])
+    inlet_bc = Dirichlet(:u, Γin, (x, t) -> Vec{3, Float64}((1.0, 0.0, 0.0)))
     add!(ch, inlet_bc)
 
-    # Walls: Dirichlet BC for velocity
-    Γwall = getfacetset(dh.grid, "wall")
-    wall_bc = Dirichlet(:u, Γwall, (x,t) -> [0.0, 0.0])
+    # Walls: No-slip (zero velocity)
+    Γwall = getfacetset(dh.grid, "wall") 
+    wall_bc = Dirichlet(:u, Γwall, (x, t) -> Vec{3, Float64}((0.0, 0.0, 0.0)))
     add!(ch, wall_bc)
 
-    # Option 1: mean-pressure constraint
+    # Periodic BCs
+    θ = π / 4  # 45 degrees
+    R = Tensor{2,3,Float64}([
+        1.0  0.0        0.0;
+        0.0  cos(θ)   -sin(θ);
+        0.0  sin(θ)    cos(θ)
+    ])
+
+    add!(ch, PeriodicDirichlet(
+        :u,
+        collect_periodic_facets(dh.grid, "Γ35", "Γ1", x -> R ⋅ x),
+        R,
+        [1, 2, 3]
+    ))
+    add!(ch, PeriodicDirichlet(
+        :u,
+        collect_periodic_facets(dh.grid, "Γ57", "Γ2", x -> R ⋅ x),
+        R,
+        [1, 2, 3]
+    ))
+    add!(ch, PeriodicDirichlet(
+        :u,
+        collect_periodic_facets(dh.grid, "Γ79", "Γ3", x -> R ⋅ x),
+        R,
+        [1, 2, 3]
+    ))
+    add!(ch, PeriodicDirichlet(
+        :u,
+        collect_periodic_facets(dh.grid, "Γ101", "Γ4", x -> R ⋅ x),
+        R,
+        [1, 2, 3]
+    ))
+
+    # Mean pressure constraint
     mean_value_constraint = setup_mean_constraint(dh, fvp)
     add!(ch, mean_value_constraint)
 
@@ -378,25 +341,34 @@ function setup_constraints(dh, fvp)
 end
 
 
+
+
 function assemble_system!(K, f, dh, cvu, cvp)
     assembler = start_assemble(K, f)
     ke = zeros(ndofs_per_cell(dh), ndofs_per_cell(dh))
     fe = zeros(ndofs_per_cell(dh))
+    
     range_u = dof_range(dh, :u)
-    ndofs_u = length(range_u)
     range_p = dof_range(dh, :p)
+    ndofs_u = length(range_u)
     ndofs_p = length(range_p)
-    ϕᵤ = Vector{Vec{2, Float64}}(undef, ndofs_u)
-    ∇ϕᵤ = Vector{Tensor{2, 2, Float64, 4}}(undef, ndofs_u)
+
+    # For 3D: velocity shape functions are Vec{3}, gradients are 3x3 tensors
+    ϕᵤ = Vector{Vec{3, Float64}}(undef, ndofs_u)
+    ∇ϕᵤ = Vector{Tensor{2, 3, Float64, 9}}(undef, ndofs_u)
     divϕᵤ = Vector{Float64}(undef, ndofs_u)
     ϕₚ = Vector{Float64}(undef, ndofs_p)
+
     for cell in CellIterator(dh)
         reinit!(cvu, cell)
         reinit!(cvp, cell)
         ke .= 0
         fe .= 0
+
         for qp in 1:getnquadpoints(cvu)
             dΩ = getdetJdV(cvu, qp)
+
+            # Collect basis function values
             for i in 1:ndofs_u
                 ϕᵤ[i] = shape_value(cvu, qp, i)
                 ∇ϕᵤ[i] = shape_gradient(cvu, qp, i)
@@ -405,43 +377,52 @@ function assemble_system!(K, f, dh, cvu, cvp)
             for i in 1:ndofs_p
                 ϕₚ[i] = shape_value(cvp, qp, i)
             end
-            # u-u
+
+            # Assemble local stiffness matrix
+            # velocity-velocity (∇u : ∇v)
             for (i, I) in pairs(range_u), (j, J) in pairs(range_u)
                 ke[I, J] += (∇ϕᵤ[i] ⊡ ∇ϕᵤ[j]) * dΩ
             end
-            # u-p
+
+            # velocity-pressure (∇⋅u * p)
             for (i, I) in pairs(range_u), (j, J) in pairs(range_p)
                 ke[I, J] += (-divϕᵤ[i] * ϕₚ[j]) * dΩ
             end
-            # p-u
+
+            # pressure-velocity (q * ∇⋅v)
             for (i, I) in pairs(range_p), (j, J) in pairs(range_u)
                 ke[I, J] += (-divϕᵤ[j] * ϕₚ[i]) * dΩ
             end
-            # rhs
+
+            # Right-hand side (source term): simple localized Gaussian bump
+            x = spatial_coordinate(cvu, qp, getcoordinates(cell))
+            b = exp(-100 * norm(x - Vec{3}((0.75, 0.0, 0.0)))^2)  # e.g. in x-direction
+            bv = Vec{3, Float64}((b, 0.0, 0.0))
+
             for (i, I) in pairs(range_u)
-                x = spatial_coordinate(cvu, qp, getcoordinates(cell))
-                b = exp(-100 * norm(x - Vec{2}((0.75, 0.1)))^2)
-                bv = Vec{2}((b, 0.0))
                 fe[I] += (ϕᵤ[i] ⋅ bv) * dΩ
             end
         end
+
         assemble!(assembler, celldofs(cell), ke, fe)
     end
+
     return K, f
 end
+
 
 function main()
     # Grid
     println("Setting up grid...")
     h = 0.05 # approximate element size
-    grid = setup_grid(h)
+    grid = setup_grid()
     # Interpolations
-    ipu = Lagrange{RefQuadrilateral, 2}()^2 # quadratic
-    ipp = Lagrange{RefQuadrilateral, 1}()   # linear
+    ipu = Lagrange{RefTetrahedron, 2}()^3 # quadratic
+    ipp = Lagrange{RefTetrahedron, 1}()   # linear
     # Dofs
     dh = setup_dofs(grid, ipu, ipp)
     # FE values
-    ipg = Lagrange{RefQuadrilateral, 1}() # linear geometric interpolation
+    ipg = Lagrange{RefTetrahedron, 1}() # linear geometric interpolation
     cvu, cvp, fvp = setup_fevalues(ipu, ipp, ipg)
     # Boundary conditions
     ch = setup_constraints(dh, fvp)
@@ -456,7 +437,7 @@ function main()
     u = K \ f
     apply!(u, ch)
     # Export the solution
-    VTKGridFile("3D_stokes_flow_tank", grid) do vtk
+    VTKGridFile("Simranjeet/paraview/3D_stokes_flow_tank", grid) do vtk
         write_solution(vtk, dh, u)
         Ferrite.write_constraints(vtk, ch)
     end
